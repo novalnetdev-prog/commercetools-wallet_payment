@@ -84,7 +84,7 @@ export class NovalnetPaymentEnabler implements PaymentEnabler {
   async createDropinBuilder(type: "embedded"): Promise<PaymentDropinBuilder> {
     if (type !== "embedded") throw new Error(`Unsupported Drop-in type: ${type}`);
     const { baseOptions } = await this.setupData;
-    const response = await fetch(`${baseOptions.processorUrl}/config`, {
+    const response = await fetch(`${baseOptions.processorUrl.replace(/\/+$/, "")}/operations/config`, {
       headers: { "X-Session-Id": baseOptions.sessionId },
       cache: "no-store",
     });

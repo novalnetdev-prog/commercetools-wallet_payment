@@ -1,0 +1,20 @@
+/* Scoped to the opt-in embedded Drop-in; existing components are unaffected. */
+.dropin { width: 100%; min-width: 0; box-sizing: border-box; }
+.method { display: flex; align-items: center; gap: 0.65rem; padding: 0.75rem;
+  border: 1px solid #d0d5dd; cursor: pointer; width: 100%; box-sizing: border-box;
+  overflow-wrap: anywhere; }
+.method + .panel { border: 1px solid #d0d5dd; border-top: 0; padding: 0.8rem; min-width: 0;
+  box-sizing: border-box; }
+.method input { flex-shrink: 0; }
+.panel[hidden] { display: none !important; }
+.panel iframe { max-width: 100%; }
+.payButton { display: block; width: 100%; margin-top: 1rem; cursor: pointer;
+  border: 0; border-radius: 4px; padding: 0.8rem; background: #182c49; color: #fff; }
+.payButton:focus-visible { outline: 2px solid #0077cc; outline-offset: 2px; }
+
+/* Override the author-level button display on selected native wallet methods. */
+.payButton[hidden] { display: none !important; }
+
+.error { font-size: 0.875rem; margin: 0.75rem 0 0; color: #a11919; }
+.error[hidden] { display: none !important; }
+.payButton:disabled { opacity: 0.6; cursor: wait; }

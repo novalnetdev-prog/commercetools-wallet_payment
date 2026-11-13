@@ -8,6 +8,7 @@ import { join } from "path";
 import { config } from "../config/config";
 import { requestContextPlugin } from "../libs/fastify/context/context";
 import { errorHandler } from "../libs/fastify/error-handler";
+import { log } from "../libs/logger";
 
 export const setupFastify = async () => {
   const server = Fastify({
@@ -20,6 +21,22 @@ export const setupFastify = async () => {
   });
 
   server.setErrorHandler(errorHandler);
+
+
+  const debugPaths = new Set([
+    "/operations/config", "/operations/payment-components", "/walletConfig",
+    "/directPayment", "/redirectPayment",
+  ]);
+  server.addHook("onResponse", async (request, reply) => {
+    const path = request.url.split("?")[0];
+    if (!debugPaths.has(path)) return;
+    const details = {
+      requestId: request.id, path, httpMethod: request.method,
+      statusCode: reply.statusCode,
+    };
+    if (reply.statusCode >= 400) log.error("[NOVALNET_DEBUG][http.response][failed]", details);
+    else log.info("[NOVALNET_DEBUG][http.response]", details);
+  });
 
   await server.register(cors, {
     allowedHeaders: [

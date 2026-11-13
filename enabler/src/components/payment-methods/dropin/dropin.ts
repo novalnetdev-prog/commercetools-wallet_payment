@@ -6,13 +6,13 @@ import type {
   PaymentDropinBuilder,
 } from "../../../payment-enabler/payment-enabler";
 import styles from "../../../style/dropin.module.scss";
-import { ACH_BANK_ICON, DROPIN_PAYMENT_LOGOS } from "./dropin-logos";
+import { appendNovalnetLogo } from "./dropin-logos";
 import { novalnetDebug, novalnetDebugError } from "../../../utils/novalnet-debug";
 
 export const DROPIN_LABELS: Record<string, { en: string; de: string }> = {
-  creditcard: { en: "Credit/Debit Cards", de: "Kredit-/Debitkarten" },
-  sepa: { en: "Direct Debit SEPA", de: "SEPA-Lastschrift" },
-  ach: { en: "Direct Debit ACH", de: "ACH-Lastschrift" },
+  creditcard: { en: "Card", de: "Karte" },
+  sepa: { en: "SEPA", de: "SEPA" },
+  ach: { en: "ACH", de: "ACH" },
   invoice: { en: "Invoice", de: "Rechnung" },
   prepayment: { en: "Prepayment", de: "Vorkasse" },
   paypal: { en: "PayPal", de: "PayPal" },
@@ -24,7 +24,7 @@ const isWallet = (method: string): boolean => method === "googlepay" || method =
 let nextDropinId = 0;
 
 function logFailure(stage: string, method: string | undefined, error: unknown): void {
-  // Do not log PSP payloads, wallet tokens, cart data, or Checkout session IDs.
+  // Do not log session IDs, payment tokens, addresses, cart data or PSP payloads.
   console.error("[Novalnet][Drop-in]", {
     stage,
     method,
@@ -34,20 +34,25 @@ function logFailure(stage: string, method: string | undefined, error: unknown): 
 }
 
 export class NovalnetDropinBuilder implements PaymentDropinBuilder {
-  // The embedded Drop-in owns a Pay button for ordinary methods and the
-  // Novalnet SDK owns each wallet button. Checkout must not create a second
-  // generic submission button for this mixed-method integration.
-  readonly dropinHasSubmit = false;
+  /**
+   * Match the Checkout-owned submit lifecycle used by Stripe's Payment Element.
+   * Checkout invokes dropin.submit() for ordinary methods. Wallets must use
+   * their own SDK-rendered buttons (a browser user gesture is required).
+   */
+  readonly dropinHasSubmit: boolean;
 
   constructor(
     private readonly methods: string[],
     private readonly createBuilder: (type: string) => Promise<PaymentComponentBuilder>,
     private readonly locale: "en" | "de",
-  ) {}
+  ) {
+    this.dropinHasSubmit = this.methods.some((method) => !isWallet(method));
+  }
 
   build(config: DropinOptions): DropinComponent {
     novalnetDebug("dropin.build", {
-      methodCount: this.methods.length, methods: this.methods,
+      methodCount: this.methods.length,
+      methods: this.methods,
       hostShowsPayButton: config.showPayButton,
       dropinHasSubmit: this.dropinHasSubmit,
     });
@@ -55,13 +60,9 @@ export class NovalnetDropinBuilder implements PaymentDropinBuilder {
   }
 }
 
-/**
- * Embedded Drop-in wrapping the existing Novalnet components. The original
- * direct/redirect payment processing and PSP request formats are unchanged.
- */
+/** A single Checkout Drop-in wrapping the existing Novalnet payment components. */
 export class NovalnetDropin implements DropinComponent {
   private root?: HTMLElement;
-  private payButton?: HTMLButtonElement;
   private errorElement?: HTMLElement;
   private selected?: string;
   private readonly components = new Map<string, PaymentComponent>();
@@ -72,6 +73,7 @@ export class NovalnetDropin implements DropinComponent {
   private mounting?: Promise<void>;
   private submitting = false;
   private switching = false;
+  private disposed = false;
   private readonly id = ++nextDropinId;
 
   constructor(
@@ -82,42 +84,42 @@ export class NovalnetDropin implements DropinComponent {
   ) {}
 
   async mount(selector: string): Promise<void> {
-    novalnetDebug("dropin.mount.start", { dropinId: this.id, methodCount: this.methods.length, alreadyMounted: Boolean(this.root) });
+    novalnetDebug("dropin.mount.start", { dropinId: this.id, methodCount: this.methods.length });
     if (this.root) throw new Error("Novalnet Drop-in is already mounted");
+    if (this.disposed) throw new Error("Novalnet Drop-in has been removed");
     const container = document.querySelector(selector);
     if (!container) throw new Error(`Drop-in container not found: ${selector}`);
     if (!this.methods.length) throw new Error("No Novalnet Drop-in methods configured");
 
-    // Do not offer Apple Pay/Google Pay when the native wallet is unavailable.
-    // A failure of one wallet must not hide the remaining non-wallet methods.
-    const availableMethods: string[] = [];
-    for (const method of this.methods) {
-      if (isWallet(method)) {
-        try {
-          novalnetDebug("dropin.wallet.probe", { dropinId: this.id, method });
-          const builder = await this.createBuilder(method);
-          const component = builder.build({
-            showPayButton: false,
-            onPayButtonClick: this.config.onPayButtonClick,
-          });
-          const available = Boolean(component.isAvailable && (await component.isAvailable()));
-          novalnetDebug("dropin.wallet.probe.result", { dropinId: this.id, method, available });
-          if (!available) {
-            console.info("[Novalnet][Drop-in] Wallet unavailable on this device", { method });
-            continue;
-          }
-          this.prepared.set(method, component);
-        } catch (error) {
-          logFailure("wallet-availability", method, error);
-          continue;
-        }
+    // Probe wallets concurrently: a slow/unavailable native wallet must not
+    // serialize Google Pay and Apple Pay initialization. Ordinary methods do
+    // not need SDK availability probes.
+    const availability = await Promise.all(this.methods.map(async (method) => {
+      if (!isWallet(method)) return true;
+      try {
+        novalnetDebug("dropin.wallet.probe", { dropinId: this.id, method });
+        const builder = await this.createBuilder(method);
+        const component = builder.build({
+          showPayButton: false,
+          strictInitialization: true,
+          onPayButtonClick: this.config.onPayButtonClick,
+        });
+        const available = Boolean(component.isAvailable && (await component.isAvailable()));
+        novalnetDebug("dropin.wallet.probe.result", { dropinId: this.id, method, available });
+        if (available) this.prepared.set(method, component);
+        else await component.remove?.();
+        return available;
+      } catch (error) {
+        logFailure("wallet-availability", method, error);
+        return false;
       }
-      availableMethods.push(method);
-    }
-    novalnetDebug("dropin.mount.methods", { dropinId: this.id, availableMethods });
-    if (!availableMethods.length) {
-      throw new Error("No configured Novalnet payment method is available on this device");
-    }
+    }));
+    if (this.disposed) throw new Error("Novalnet Drop-in was removed during initialization");
+    const methods = this.methods.filter((_method, index) => availability[index]);
+    novalnetDebug("dropin.mount.methods", { dropinId: this.id, availableMethods: methods });
+    if (!methods.length) throw new Error("No configured Novalnet payment method is available on this device");
+    const regularMethods = methods.filter((method) => !isWallet(method));
+    const walletMethods = methods.filter(isWallet);
 
     const root = document.createElement("div");
     root.className = styles.dropin;
@@ -126,62 +128,90 @@ export class NovalnetDropin implements DropinComponent {
     this.root = root;
     container.appendChild(root);
 
-    // The tab selector, logos, and panel shell are ours; the sensitive payment
-    // fields and native wallet buttons remain owned by the existing components.
+    // Native wallet buttons are separate actions INSIDE the unified Drop-in.
+    // Unlike Stripe's Payment Element, Novalnet SDK wallets cannot safely be
+    // triggered by a generic Checkout submit() call.
+    const walletHosts = new Map<string, HTMLElement>();
+    if (walletMethods.length) {
+      const walletRow = document.createElement("div");
+      walletRow.className = styles.walletRow;
+      walletRow.setAttribute("role", "group");
+      walletRow.setAttribute("aria-label", this.locale === "de" ? "Wallet-Zahlung" : "Wallet payment");
+      const heading = document.createElement("p");
+      heading.className = styles.walletHeading;
+      heading.textContent = this.locale === "de" ? "Mit Wallet bezahlen" : "Pay with a wallet";
+      walletRow.appendChild(heading);
+      const walletActions = document.createElement("div");
+      walletActions.className = styles.walletActions;
+      for (const method of walletMethods) {
+        const host = document.createElement("div");
+        host.className = styles.walletAction;
+        host.id = `novalnet-dropin-${this.id}-${method}`;
+        walletActions.appendChild(host);
+        walletHosts.set(method, host);
+      }
+      walletRow.appendChild(walletActions);
+      root.appendChild(walletRow);
+      if (regularMethods.length) {
+        const divider = document.createElement("p");
+        divider.className = styles.divider;
+        divider.textContent = this.locale === "de" ? "Oder mit einer anderen Zahlungsart" : "Or pay with";
+        root.appendChild(divider);
+      }
+    }
+
     const methodList = document.createElement("div");
     methodList.className = styles.methodList;
     methodList.setAttribute("role", "radiogroup");
     methodList.setAttribute("aria-label", this.locale === "de" ? "Zahlungsart wählen" : "Choose payment method");
-    root.appendChild(methodList);
+    if (regularMethods.length) root.appendChild(methodList);
 
-    for (const method of availableMethods) {
+    const panelHolder = document.createElement("div");
+    panelHolder.className = styles.panelHolder;
+    root.appendChild(panelHolder);
+
+    for (const method of regularMethods) {
       const label = document.createElement("label");
       label.className = styles.method;
-      label.setAttribute("data-active", String(method === availableMethods[0]));
+      label.setAttribute("data-active", String(method === regularMethods[0]));
       const input = document.createElement("input");
       input.type = "radio";
       input.name = `novalnet-dropin-${this.id}`;
       input.value = method;
-      input.checked = method === availableMethods[0];
+      input.checked = method === regularMethods[0];
       this.radios.set(method, input);
       this.methodLabels.set(method, label);
-
-      const logo = document.createElement("img");
-      logo.className = styles.methodLogo;
-      logo.src = method === "creditcard"
-        ? DROPIN_PAYMENT_LOGOS.visa
-        : method === "ach" ? ACH_BANK_ICON : DROPIN_PAYMENT_LOGOS[method] ?? ACH_BANK_ICON;
-      logo.alt = ""; // The adjacent payment label provides the accessible name.
-      logo.setAttribute("aria-hidden", "true");
 
       const text = document.createElement("span");
       text.className = styles.methodText;
       text.textContent = DROPIN_LABELS[method]?.[this.locale] || method;
-      label.append(input, logo, text);
+      appendNovalnetLogo(label, method, styles.methodLogo);
+      label.append(input, text);
       methodList.appendChild(label);
 
-      const panel = document.createElement("div");
+      const panel = document.createElement("section");
       panel.className = styles.panel;
       panel.id = `novalnet-dropin-${this.id}-${method}`;
+      panel.setAttribute("aria-label", DROPIN_LABELS[method]?.[this.locale] || method);
       panel.hidden = true;
       if (method === "creditcard") {
-        // Show supported card brand artwork without changing hosted card fields.
+        // Show real Novalnet card brands only when their CDN assets exist.
         const cardBrands = document.createElement("div");
         cardBrands.className = styles.cardBrands;
-        cardBrands.setAttribute("aria-label", this.locale === "de" ? "Kartenmarken" : "Card brands");
+        cardBrands.setAttribute("aria-label", this.locale === "de" ? "Akzeptierte Karten" : "Accepted cards");
         for (const brand of ["visa", "mastercard", "amex"]) {
-          const brandLogo = document.createElement("img");
-          brandLogo.src = DROPIN_PAYMENT_LOGOS[brand];
-          brandLogo.alt = brand === "amex" ? "American Express" : brand === "visa" ? "Visa" : "Mastercard";
-          brandLogo.className = styles.cardBrandLogo;
-          cardBrands.appendChild(brandLogo);
+          appendNovalnetLogo(
+            cardBrands, brand, styles.cardBrandLogo,
+            brand === "amex" ? "American Express" : brand === "visa" ? "Visa" : "Mastercard",
+          );
         }
         panel.appendChild(cardBrands);
       }
-      root.appendChild(panel);
+      panelHolder.appendChild(panel);
       this.panels.set(method, panel);
 
       input.addEventListener("change", () => {
+        if (this.disposed) return;
         if (this.submitting || this.switching) {
           input.checked = false;
           if (this.selected) this.radios.get(this.selected)!.checked = true;
@@ -190,27 +220,9 @@ export class NovalnetDropin implements DropinComponent {
         if (input.checked) void this.activate(method).catch((error) => {
           logFailure("switch-method", method, error);
           this.showError();
-          input.checked = false;
-          if (this.selected) this.radios.get(this.selected)!.checked = true;
         });
       });
     }
-
-    // Drop-in owns its regular Pay button, irrespective of the host's
-    // showPayButton flag, because dropinHasSubmit=false. Native wallet buttons
-    // come from the Novalnet SDK and are shown instead when selected.
-    const payButton = document.createElement("button");
-    payButton.type = "button";
-    payButton.className = styles.payButton;
-    payButton.textContent = this.locale === "de" ? "Bezahlen" : "Pay";
-    payButton.addEventListener("click", () => {
-      void this.submit().catch((error) => {
-        logFailure("pay-button", this.selected, error);
-        this.showError();
-      });
-    });
-    this.payButton = payButton;
-    root.appendChild(payButton);
 
     const errorElement = document.createElement("p");
     errorElement.className = styles.error;
@@ -219,16 +231,42 @@ export class NovalnetDropin implements DropinComponent {
     root.appendChild(errorElement);
     this.errorElement = errorElement;
 
-    let stage = "mount-initial-method";
+    let stage = "mount-wallets";
     try {
-      await this.activate(availableMethods[0]);
+      let mountedWallets = 0;
+      // Each wallet's button is rendered in a visible container by its SDK.
+      // Do not hide or manufacture a click on a native wallet button.
+      for (const method of walletMethods) {
+        const host = walletHosts.get(method)!;
+        try {
+          const component = this.prepared.get(method)!;
+          novalnetDebug("dropin.wallet.mount.start", { dropinId: this.id, method });
+          await Promise.resolve(component.mount(`#${host.id}`));
+          if (this.disposed) throw new Error("Drop-in removed during wallet mounting");
+          this.components.set(method, component);
+          this.prepared.delete(method);
+          mountedWallets++;
+          novalnetDebug("dropin.wallet.mount.complete", { dropinId: this.id, method });
+        } catch (error) {
+          logFailure("wallet-mount", method, error);
+          try { await this.prepared.get(method)?.remove?.(); } catch { /* keep wallet failure isolated */ }
+          this.prepared.delete(method);
+          host.remove();
+        }
+      }
+      if (regularMethods.length) {
+        stage = "mount-initial-method";
+        await this.activate(regularMethods[0]);
+      } else if (!mountedWallets) {
+        throw new Error("No Novalnet wallet could be mounted");
+      }
       stage = "notify-checkout-ready";
-      novalnetDebug("dropin.ready.callback.start", { dropinId: this.id, selected: availableMethods[0] });
+      novalnetDebug("dropin.ready.callback.start", { dropinId: this.id, selected: this.selected, walletCount: mountedWallets });
       await this.config.onDropinReady?.();
       novalnetDebug("dropin.ready.callback.complete", { dropinId: this.id });
     } catch (error) {
       novalnetDebugError("dropin.mount.failed", error, { dropinId: this.id, stage });
-      logFailure(stage, availableMethods[0], error);
+      logFailure(stage, regularMethods[0], error);
       await this.remove();
       throw error;
     }
@@ -244,38 +282,50 @@ export class NovalnetDropin implements DropinComponent {
 
   private async activate(method: string): Promise<void> {
     novalnetDebug("dropin.activate.start", { dropinId: this.id, method, selectedBefore: this.selected });
+    if (this.disposed) throw new Error("Novalnet Drop-in has been removed");
     if (!this.panels.has(method)) throw new Error(`Unsupported Drop-in method: ${method}`);
     if (this.switching || this.submitting) throw new Error("Payment method is busy");
     this.switching = true;
+    const previous = this.selected;
     for (const radio of this.radios.values()) radio.disabled = true;
     try {
+      // IMPORTANT: SDK-hosted card iframes and native wallet buttons must mount
+      // inside a VISIBLE container. Mounting in hidden panels returns zero
+      // dimensions and can produce blank fields or an incorrect layout.
+      for (const [name, panel] of this.panels) panel.hidden = name !== method;
       if (!this.components.has(method)) {
         const panel = this.panels.get(method)!;
         const pending = (async () => {
           const component = this.prepared.get(method) ??
             (await this.createBuilder(method)).build({
               showPayButton: false,
-              // Only the embedded card requests strict SDK readiness checks.
               strictInitialization: method === "creditcard",
               ...(isWallet(method) ? { onPayButtonClick: this.config.onPayButtonClick } : {}),
             });
           novalnetDebug("dropin.component.mount.start", { dropinId: this.id, method });
-          await Promise.resolve(component.mount(`#${panel.id}`));
+          try {
+            await Promise.resolve(component.mount(`#${panel.id}`));
+            if (this.disposed) throw new Error("Novalnet Drop-in removed while mounting component");
+            this.components.set(method, component);
+            this.prepared.delete(method);
+          } catch (error) {
+            try { await component.remove?.(); } catch { /* preserve the original mount error */ }
+            throw error;
+          }
           novalnetDebug("dropin.component.mount.complete", { dropinId: this.id, method });
-          this.components.set(method, component);
-          this.prepared.delete(method);
         })();
         this.mounting = pending;
         await pending;
       }
       this.selected = method;
-      for (const [name, panel] of this.panels) panel.hidden = name !== method;
       for (const [name, radio] of this.radios) radio.checked = name === method;
       for (const [name, label] of this.methodLabels) label.setAttribute("data-active", String(name === method));
-      if (this.payButton) this.payButton.hidden = isWallet(method);
       if (this.errorElement) this.errorElement.hidden = true;
       novalnetDebug("dropin.activate.complete", { dropinId: this.id, method });
     } catch (error) {
+      for (const [name, panel] of this.panels) panel.hidden = name !== previous;
+      for (const [name, radio] of this.radios) radio.checked = name === previous;
+      for (const [name, label] of this.methodLabels) label.setAttribute("data-active", String(name === previous));
       novalnetDebugError("dropin.activate.failed", error, { dropinId: this.id, method });
       throw error;
     } finally {
@@ -285,25 +335,19 @@ export class NovalnetDropin implements DropinComponent {
   }
 
   async submit(): Promise<void> {
-    novalnetDebug("dropin.submit.start", { dropinId: this.id, selected: this.selected, submitting: this.submitting, switching: this.switching });
+    novalnetDebug("dropin.submit.start", { dropinId: this.id, selected: this.selected });
+    if (this.disposed) throw new Error("Novalnet Drop-in has been removed");
     if (this.submitting) return;
     if (this.switching) throw new Error("Payment method is still loading");
-    if (!this.selected) throw new Error("No Novalnet payment method selected");
-    // Fail explicitly rather than silently resolving a generic Checkout submit.
-    if (isWallet(this.selected)) {
-      throw new Error("Use the Google Pay or Apple Pay button to authorize this payment");
-    }
+    if (!this.selected) throw new Error("Use the Google Pay or Apple Pay button to authorize this payment");
     this.submitting = true;
     const method = this.selected;
     for (const radio of this.radios.values()) radio.disabled = true;
-    if (this.payButton) this.payButton.disabled = true;
     try {
       await this.mounting;
       const component = this.components.get(method);
       if (!component) throw new Error("Payment component not ready");
-      novalnetDebug("dropin.submit.host-validation", { dropinId: this.id, method });
       await this.config.onPayButtonClick?.();
-      novalnetDebug("dropin.submit.component", { dropinId: this.id, method });
       await Promise.resolve(component.submit());
       novalnetDebug("dropin.submit.complete", { dropinId: this.id, method });
     } catch (error) {
@@ -313,19 +357,18 @@ export class NovalnetDropin implements DropinComponent {
     } finally {
       this.submitting = false;
       for (const radio of this.radios.values()) radio.disabled = false;
-      if (this.payButton) this.payButton.disabled = false;
     }
   }
 
   async remove(): Promise<void> {
     novalnetDebug("dropin.remove", { dropinId: this.id, selected: this.selected, mountedComponents: this.components.size });
-    for (const component of [...this.components.values(), ...this.prepared.values()]) {
+    this.disposed = true;
+    for (const component of new Set([...this.components.values(), ...this.prepared.values()])) {
       try { await component.remove?.(); }
       catch (error) { logFailure("remove-component", this.selected, error); }
     }
     this.root?.remove();
     this.root = undefined;
-    this.payButton = undefined;
     this.errorElement = undefined;
     this.panels.clear();
     this.radios.clear();

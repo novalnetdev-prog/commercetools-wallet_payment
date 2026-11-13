@@ -29,6 +29,7 @@ import { CreditcardBuilder } from "../components/payment-methods/creditcard/cred
 import { GooglePayBuilder, ApplePayBuilder } from "../components/payment-methods/wallet/wallet";
 import { NovalnetDropinBuilder, DROPIN_LABELS } from "../components/payment-methods/dropin/dropin";
 import { clearPaymentError, showPaymentError, showReturnedPaymentError } from './payment-error';
+import { novalnetDebug, novalnetDebugError, novalnetDebugRequestId } from "../utils/novalnet-debug";
 import {
   EnablerOptions,
   PaymentComponentBuilder,
@@ -55,12 +56,18 @@ export class NovalnetPaymentEnabler implements PaymentEnabler {
   setupData: Promise<{ baseOptions: BaseOptions }>;
 
   constructor(options: EnablerOptions) {
+    novalnetDebug("enabler.constructor", {
+      hasProcessorUrl: Boolean(options.processorUrl),
+      hasSessionId: Boolean(options.sessionId),
+      locale: options.locale ?? "(not supplied)",
+    });
     this.setupData = NovalnetPaymentEnabler._Setup(options);
   }
 
   private static _Setup = async (
     options: EnablerOptions
   ): Promise<{ baseOptions: BaseOptions }> => {
+    novalnetDebug("enabler.setup", { locale: options.locale ?? "(not supplied)" });
     showReturnedPaymentError();
 
     return Promise.resolve({
@@ -69,6 +76,7 @@ export class NovalnetPaymentEnabler implements PaymentEnabler {
         sessionId: options.sessionId,
         locale: options.locale,
         onComplete: (result) => {
+          novalnetDebug("enabler.payment.complete", { isSuccess: result.isSuccess });
           clearPaymentError();
           options.onComplete?.(result);
         },
@@ -81,6 +89,7 @@ export class NovalnetPaymentEnabler implements PaymentEnabler {
             stack: error instanceof Error ? error.stack : undefined,
             hasPaymentReference: Boolean(context?.paymentReference),
           });
+          novalnetDebugError("enabler.payment.onError", error, { hasPaymentReference: Boolean(context?.paymentReference) });
           showPaymentError(error);
           options.onError?.(error, context);
         },
@@ -90,22 +99,29 @@ export class NovalnetPaymentEnabler implements PaymentEnabler {
 
   /** Create an embedded Drop-in only when merchant configuration enables it. */
   async createDropinBuilder(type: "embedded"): Promise<PaymentDropinBuilder> {
+    novalnetDebug("dropin.builder.start", { type });
     if (type !== "embedded") throw new Error(`Unsupported Drop-in type: ${type}`);
     const { baseOptions } = await this.setupData;
     const configPath = "/operations/config";
+    const requestId = novalnetDebugRequestId();
+    novalnetDebug("dropin.config.request", { requestId, path: configPath });
     let response: Response;
     try {
       response = await fetch(`${baseOptions.processorUrl.replace(/\/+$/, "")}${configPath}`, {
-        headers: { "X-Session-Id": baseOptions.sessionId },
+        headers: { "X-Session-Id": baseOptions.sessionId, "X-Request-ID": requestId },
         cache: "no-store",
       });
     } catch (error) {
+      novalnetDebugError("dropin.config.network-error", error, { requestId, path: configPath });
       console.error("[Novalnet][Drop-in][config] Network request failed", {
         path: configPath,
         message: error instanceof Error ? error.message : "Unknown network error",
       });
       throw new Error("Unable to connect to Novalnet Drop-in configuration");
     }
+    novalnetDebug("dropin.config.response", {
+      requestId, path: configPath, status: response.status, ok: response.ok,
+    });
     if (!response.ok) {
       // HTTP status + request ID let us correlate browser failures with processor logs.
       // Never dump full response bodies: they can include sensitive diagnostics.
@@ -121,6 +137,7 @@ export class NovalnetPaymentEnabler implements PaymentEnabler {
     try {
       configuration = await response.json();
     } catch (error) {
+      novalnetDebugError("dropin.config.invalid-json", error, { requestId, status: response.status });
       console.error("[Novalnet][Drop-in][config] Invalid JSON response", {
         path: configPath,
         status: response.status,
@@ -133,6 +150,11 @@ export class NovalnetPaymentEnabler implements PaymentEnabler {
           (method): method is string => typeof method === "string" && method in DROPIN_LABELS,
         )
       : [];
+    novalnetDebug("dropin.config.methods", {
+      requestId, configuredMethodCount: Array.isArray(configuration?.dropinMethods)
+        ? configuration.dropinMethods.length : 0,
+      validMethods: methods,
+    });
     if (!methods.length) {
       console.error("[Novalnet][Drop-in][config] No supported methods returned", {
         path: configPath,
@@ -142,6 +164,7 @@ export class NovalnetPaymentEnabler implements PaymentEnabler {
       throw new Error("Novalnet Drop-in is not enabled for this merchant");
     }
     const locale = String(baseOptions.locale ?? "").toLowerCase().startsWith("de") ? "de" : "en";
+    novalnetDebug("dropin.builder.ready", { requestId, locale, methodCount: methods.length });
     return new NovalnetDropinBuilder(methods, (method) => this.createComponentBuilder(method), locale);
   }
 
@@ -149,6 +172,7 @@ export class NovalnetPaymentEnabler implements PaymentEnabler {
     type: string
   ): Promise<PaymentComponentBuilder | never> {
   
+    novalnetDebug("component.builder.start", { requestedType: type });
     const { baseOptions } = await this.setupData;
     showReturnedPaymentError(true);
     
@@ -239,9 +263,11 @@ export class NovalnetPaymentEnabler implements PaymentEnabler {
     const Builder = supportedMethods[paymentType];
   
     if (!Builder) {
+      novalnetDebug("component.builder.unsupported", { requestedType: type, normalizedType: paymentType });
       throw new Error(`Unsupported payment type: ${type}`);
     }
-  
+
+    novalnetDebug("component.builder.ready", { method: paymentType });
     return new Builder(baseOptions);
   }
 

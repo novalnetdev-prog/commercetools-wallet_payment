@@ -6,6 +6,7 @@ import type {
   PaymentDropinBuilder,
 } from "../../../payment-enabler/payment-enabler";
 import styles from "../../../style/dropin.module.scss";
+import { novalnetDebug, novalnetDebugError } from "../../../utils/novalnet-debug";
 
 export const DROPIN_LABELS: Record<string, { en: string; de: string }> = {
   creditcard: { en: "Credit/Debit Cards", de: "Kredit-/Debitkarten" },
@@ -44,6 +45,11 @@ export class NovalnetDropinBuilder implements PaymentDropinBuilder {
   ) {}
 
   build(config: DropinOptions): DropinComponent {
+    novalnetDebug("dropin.build", {
+      methodCount: this.methods.length, methods: this.methods,
+      hostShowsPayButton: config.showPayButton,
+      dropinHasSubmit: this.dropinHasSubmit,
+    });
     return new NovalnetDropin(this.methods, this.createBuilder, this.locale, config);
   }
 }
@@ -74,6 +80,7 @@ export class NovalnetDropin implements DropinComponent {
   ) {}
 
   async mount(selector: string): Promise<void> {
+    novalnetDebug("dropin.mount.start", { dropinId: this.id, methodCount: this.methods.length, alreadyMounted: Boolean(this.root) });
     if (this.root) throw new Error("Novalnet Drop-in is already mounted");
     const container = document.querySelector(selector);
     if (!container) throw new Error(`Drop-in container not found: ${selector}`);
@@ -85,12 +92,15 @@ export class NovalnetDropin implements DropinComponent {
     for (const method of this.methods) {
       if (isWallet(method)) {
         try {
+          novalnetDebug("dropin.wallet.probe", { dropinId: this.id, method });
           const builder = await this.createBuilder(method);
           const component = builder.build({
             showPayButton: false,
             onPayButtonClick: this.config.onPayButtonClick,
           });
-          if (!component.isAvailable || !(await component.isAvailable())) {
+          const available = Boolean(component.isAvailable && (await component.isAvailable()));
+          novalnetDebug("dropin.wallet.probe.result", { dropinId: this.id, method, available });
+          if (!available) {
             console.info("[Novalnet][Drop-in] Wallet unavailable on this device", { method });
             continue;
           }
@@ -102,6 +112,7 @@ export class NovalnetDropin implements DropinComponent {
       }
       availableMethods.push(method);
     }
+    novalnetDebug("dropin.mount.methods", { dropinId: this.id, availableMethods });
     if (!availableMethods.length) {
       throw new Error("No configured Novalnet payment method is available on this device");
     }
@@ -176,8 +187,11 @@ export class NovalnetDropin implements DropinComponent {
     try {
       await this.activate(availableMethods[0]);
       stage = "notify-checkout-ready";
+      novalnetDebug("dropin.ready.callback.start", { dropinId: this.id, selected: availableMethods[0] });
       await this.config.onDropinReady?.();
+      novalnetDebug("dropin.ready.callback.complete", { dropinId: this.id });
     } catch (error) {
+      novalnetDebugError("dropin.mount.failed", error, { dropinId: this.id, stage });
       logFailure(stage, availableMethods[0], error);
       await this.remove();
       throw error;
@@ -193,6 +207,7 @@ export class NovalnetDropin implements DropinComponent {
   }
 
   private async activate(method: string): Promise<void> {
+    novalnetDebug("dropin.activate.start", { dropinId: this.id, method, selectedBefore: this.selected });
     if (!this.panels.has(method)) throw new Error(`Unsupported Drop-in method: ${method}`);
     if (this.switching || this.submitting) throw new Error("Payment method is busy");
     this.switching = true;
@@ -208,7 +223,9 @@ export class NovalnetDropin implements DropinComponent {
               strictInitialization: method === "creditcard",
               ...(isWallet(method) ? { onPayButtonClick: this.config.onPayButtonClick } : {}),
             });
+          novalnetDebug("dropin.component.mount.start", { dropinId: this.id, method });
           await Promise.resolve(component.mount(`#${panel.id}`));
+          novalnetDebug("dropin.component.mount.complete", { dropinId: this.id, method });
           this.components.set(method, component);
           this.prepared.delete(method);
         })();
@@ -220,6 +237,10 @@ export class NovalnetDropin implements DropinComponent {
       for (const [name, radio] of this.radios) radio.checked = name === method;
       if (this.payButton) this.payButton.hidden = isWallet(method);
       if (this.errorElement) this.errorElement.hidden = true;
+      novalnetDebug("dropin.activate.complete", { dropinId: this.id, method });
+    } catch (error) {
+      novalnetDebugError("dropin.activate.failed", error, { dropinId: this.id, method });
+      throw error;
     } finally {
       this.switching = false;
       for (const radio of this.radios.values()) radio.disabled = this.submitting;
@@ -227,6 +248,7 @@ export class NovalnetDropin implements DropinComponent {
   }
 
   async submit(): Promise<void> {
+    novalnetDebug("dropin.submit.start", { dropinId: this.id, selected: this.selected, submitting: this.submitting, switching: this.switching });
     if (this.submitting) return;
     if (this.switching) throw new Error("Payment method is still loading");
     if (!this.selected) throw new Error("No Novalnet payment method selected");
@@ -242,8 +264,11 @@ export class NovalnetDropin implements DropinComponent {
       await this.mounting;
       const component = this.components.get(method);
       if (!component) throw new Error("Payment component not ready");
+      novalnetDebug("dropin.submit.host-validation", { dropinId: this.id, method });
       await this.config.onPayButtonClick?.();
+      novalnetDebug("dropin.submit.component", { dropinId: this.id, method });
       await Promise.resolve(component.submit());
+      novalnetDebug("dropin.submit.complete", { dropinId: this.id, method });
     } catch (error) {
       logFailure("submit", method, error);
       this.showError();
@@ -256,6 +281,7 @@ export class NovalnetDropin implements DropinComponent {
   }
 
   async remove(): Promise<void> {
+    novalnetDebug("dropin.remove", { dropinId: this.id, selected: this.selected, mountedComponents: this.components.size });
     for (const component of [...this.components.values(), ...this.prepared.values()]) {
       try { await component.remove?.(); }
       catch (error) { logFailure("remove-component", this.selected, error); }

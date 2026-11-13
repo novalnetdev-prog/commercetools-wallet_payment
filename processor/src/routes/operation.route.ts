@@ -46,9 +46,21 @@ export const operationsRoute = async (
         },
       },
     },
-    async (_, reply) => {
-      const config = await opts.paymentService.config();
-      reply.code(200).send(config);
+    async (request, reply) => {
+      log.info("[NOVALNET_DEBUG][dropin.config][start]", { requestId: request.id });
+      try {
+        const config = await opts.paymentService.config();
+        const dropinMethods = (config as { dropinMethods?: string[] }).dropinMethods ?? [];
+        log.info("[NOVALNET_DEBUG][dropin.config][success]", {
+          requestId: request.id, methodCount: dropinMethods.length, methods: dropinMethods,
+        });
+        reply.code(200).send(config);
+      } catch (error) {
+        log.error("[NOVALNET_DEBUG][dropin.config][failed]", {
+          requestId: request.id, message: error instanceof Error ? error.message : "Unknown error",
+        });
+        throw error;
+      }
     },
   );
 
@@ -78,9 +90,23 @@ export const operationsRoute = async (
         },
       },
     },
-    async (_, reply) => {
-      const result = await opts.paymentService.getSupportedPaymentComponents();
-      reply.code(200).send(result);
+    async (request, reply) => {
+      log.info("[NOVALNET_DEBUG][capabilities][start]", { requestId: request.id });
+      try {
+        const result = await opts.paymentService.getSupportedPaymentComponents();
+        log.info("[NOVALNET_DEBUG][capabilities][success]", {
+          requestId: request.id,
+          componentCount: result.components.length,
+          dropinCount: result.dropins.length,
+          expressCount: result.express.length,
+        });
+        reply.code(200).send(result);
+      } catch (error) {
+        log.error("[NOVALNET_DEBUG][capabilities][failed]", {
+          requestId: request.id, message: error instanceof Error ? error.message : "Unknown error",
+        });
+        throw error;
+      }
     },
   );
 

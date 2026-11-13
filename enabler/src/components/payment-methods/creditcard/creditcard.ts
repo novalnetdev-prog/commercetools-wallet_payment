@@ -545,7 +545,7 @@ export class Creditcard extends BaseComponent {
 
     return `
       <div class="${styles.wrapper}">
-        <p>${description}</p>
+        ${this.strictInitialization ? "" : `<p>${description}</p>`}
         
         <iframe
           id="novalnet_iframe"

@@ -42,20 +42,40 @@ function loadWalletSdk(): Promise<void> {
   walletScriptPromise = new Promise<void>((resolve, reject) => {
     const existing = document.querySelector(`script[src="${sdkUrl}"]`) as HTMLScriptElement | null;
     const script = existing ?? document.createElement("script");
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      script.removeEventListener("load", onLoad);
+      script.removeEventListener("error", onError);
+      if (error) reject(error);
+      else resolve();
+    };
     const onLoad = () => {
       novalnetDebug("wallet.sdk.loaded", { apiAvailable: Boolean(window.NovalnetPayment) });
-      window.NovalnetPayment ? resolve() : reject(new Error("Novalnet wallet SDK unavailable"));
+      finish(window.NovalnetPayment ? undefined : new Error("Novalnet wallet SDK unavailable"));
     };
     const onError = () => {
       novalnetDebug("wallet.sdk.load.failed", { scriptSource: "Novalnet v3 CDN" });
-      reject(new Error("Novalnet wallet SDK failed to load"));
+      finish(new Error("Novalnet wallet SDK failed to load"));
     };
+    // An existing script can have finished loading before these event listeners
+    // were installed. Bounded failure avoids permanently hanging Drop-in mount.
+    const timeout = setTimeout(() => {
+      finish(new Error("Novalnet wallet SDK load timed out"));
+    }, 10000);
     script.addEventListener("load", onLoad, { once: true });
     script.addEventListener("error", onError, { once: true });
     if (!existing) {
       script.src = sdkUrl;
       script.async = true;
       document.head.appendChild(script);
+    } else {
+      const readyState = (script as HTMLScriptElement & { readyState?: string }).readyState;
+      if (readyState === "complete" || readyState === "loaded") {
+        queueMicrotask(onLoad);
+      }
     }
   }).catch((err) => {
     walletScriptPromise = undefined; // Allow retry after a failed script load.
@@ -235,6 +255,9 @@ export class NovalnetWallet extends BaseComponent {
     try {
       const available = await this.isAvailable();
       if (!available) {
+        if (this.componentOptions.strictInitialization) {
+          throw new Error("Novalnet wallet became unavailable before button mount");
+        }
         host.textContent = this.getLanguage() === "de"
           ? "Diese Zahlungsmethode ist auf diesem Gerät nicht verfügbar."
           : "This payment method is not available on this device.";

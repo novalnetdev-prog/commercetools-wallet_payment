@@ -47,9 +47,21 @@ export const paymentRoutes = async (
     },
     async (request, reply) => {
       reply.header("Cache-Control", "no-store");
+      log.info("[NOVALNET_DEBUG][wallet.config][start]", {
+        requestId: request.id, method: request.query.paymentMethod,
+      });
       try {
-        return await opts.paymentService.getWalletConfig(request.query.paymentMethod);
+        const result = await opts.paymentService.getWalletConfig(request.query.paymentMethod);
+        log.info("[NOVALNET_DEBUG][wallet.config][success]", {
+          requestId: request.id, method: request.query.paymentMethod,
+          environment: result.environment, hasClientKey: Boolean(result.clientKey),
+        });
+        return result;
       } catch (error) {
+        log.error("[NOVALNET_DEBUG][wallet.config][failed]", {
+          requestId: request.id, method: request.query.paymentMethod,
+          message: error instanceof Error ? error.message : "Unknown error",
+        });
         if (error instanceof CheckoutPaymentError) {
           return reply.code(400).send({ message: error.message });
         }
@@ -122,6 +134,14 @@ export const paymentRoutes = async (
           paymentMethod: request.body?.paymentMethod?.type,
           paymentOutcome: request.body?.paymentOutcome,
         });
+        if (["GOOGLEPAY", "APPLEPAY"].includes(String(request.body?.paymentMethod?.type).toUpperCase())) {
+          log.info("[NOVALNET_DEBUG][wallet.payment][start]", {
+            requestId: request.id, method: request.body.paymentMethod.type,
+            hasWalletToken: Boolean(request.body.paymentMethod.walletToken),
+            hasWalletAmount: request.body.paymentMethod.walletAmount !== undefined,
+            hasWalletCurrency: Boolean(request.body.paymentMethod.walletCurrency),
+          });
+        }
 
         const resp = await opts.paymentService.createDirectPayment({
           data: request.body,
@@ -132,6 +152,14 @@ export const paymentRoutes = async (
           transactionStatus: resp?.transactionStatus,
           paymentReference: resp?.paymentReference,
         });
+        if (["GOOGLEPAY", "APPLEPAY"].includes(String(request.body?.paymentMethod?.type).toUpperCase())) {
+          log.info("[NOVALNET_DEBUG][wallet.payment][complete]", {
+            requestId: request.id, method: request.body.paymentMethod.type,
+            transactionStatus: resp?.transactionStatus,
+            hasPaymentReference: Boolean(resp?.paymentReference),
+            hasRedirect: Boolean(resp?.txnSecret),
+          });
+        }
 
         if (resp?.transactionStatus === "FAILURE") {
           log.error("Direct payment failed", {
@@ -145,6 +173,7 @@ export const paymentRoutes = async (
         return reply.code(200).send(resp);
       } catch (error) {
         log.error("Direct payment processing error", {
+          requestId: request.id,
           message: error instanceof Error ? error.message : String(error),
           stack: error instanceof Error ? error.stack : undefined,
         });

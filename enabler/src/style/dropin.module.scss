@@ -1,0 +1,152 @@
+/* Novalnet embedded Drop-in only. Standalone payment components are not restyled. */
+.dropin {
+  --nn-dropin-accent: #2368c4;
+  --nn-dropin-border: #dce3ec;
+  --nn-dropin-text: #202c3b;
+  width: 100%;
+  max-width: var(--novalnet-dropin-max-width, 680px);
+  min-width: 0;
+  margin-inline: auto;
+  box-sizing: border-box;
+  color: var(--nn-dropin-text);
+  font: 400 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.dropin, .dropin * { box-sizing: border-box; }
+
+/* Stripe-like logo tabs: swipe/scroll to reveal more methods on mobile. */
+.methodList {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 2px 2px 10px;
+  margin: 0 0 4px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+.method {
+  position: relative;
+  display: flex;
+  flex: 0 0 114px;
+  min-width: 0;
+  min-height: 76px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin: 0;
+  padding: 9px 8px 8px;
+  cursor: pointer;
+  scroll-snap-align: start;
+  border: 1px solid var(--nn-dropin-border);
+  border-radius: 8px;
+  background: #fff;
+  color: #37465b;
+  text-align: center;
+  box-shadow: 0 1px 2px rgb(25 42 70 / 5%);
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+.method:hover { border-color: #91b4e8; background: #fbfdff; }
+.method[data-active="true"] {
+  border: 2px solid var(--nn-dropin-accent);
+  padding: 8px 7px 7px;
+  background: #f4f8ff;
+  color: #134b9b;
+  box-shadow: 0 0 0 1px rgb(35 104 196 / 8%);
+}
+.method:focus-within { outline: 2px solid #2368c4; outline-offset: 2px; }
+.method input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  left: 50%;
+  top: 50%;
+  margin: 0;
+}
+.method input[type="radio"]:disabled ~ * { opacity: .65; }
+.methodLogo {
+  display: block;
+  width: auto;
+  height: 25px;
+  max-width: 79px;
+  object-fit: contain;
+}
+.methodText {
+  display: block;
+  max-width: 100%;
+  font: 600 11px/1.22 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow-wrap: break-word;
+}
+
+/* Keep processor and hosted-iframe fields inside a compact, responsive frame. */
+.panel {
+  width: 100%;
+  min-width: 0;
+  margin: 0 0 12px;
+  padding: clamp(14px, 3vw, 22px);
+  border: 1px solid var(--nn-dropin-border);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgb(25 42 70 / 4%);
+}
+.panel[hidden] { display: none !important; }
+.panel :global(#novalnet_iframe) {
+  display: block;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  border: 0;
+}
+.panel iframe { max-width: 100%; }
+.panel :global(input:not([type="hidden"]):not([type="radio"])),
+.panel :global(select) {
+  max-width: 100%;
+  border-radius: 5px;
+}
+.panel p { margin-top: 0; }
+.cardBrands {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+.cardBrandLogo {
+  display: block;
+  max-width: 54px;
+  height: 21px;
+  object-fit: contain;
+}
+
+.payButton {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  padding: 11px 16px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--nn-dropin-accent);
+  color: #fff;
+  font: 600 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: center;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.payButton:hover { background: #1453a9; }
+.payButton:focus-visible { outline: 2px solid #2368c4; outline-offset: 3px; }
+.payButton[hidden] { display: none !important; }
+.payButton:disabled { opacity: .6; cursor: wait; }
+
+.error { font-size: 13px; margin: 12px 0 0; color: #a11919; }
+.error[hidden] { display: none !important; }
+
+@media (max-width: 480px) {
+  .method { flex-basis: 98px; min-height: 70px; gap: 5px; }
+  .methodLogo { height: 23px; max-width: 68px; }
+  .methodText { font-size: 10px; }
+  .panel { padding: 14px 12px; }
+}

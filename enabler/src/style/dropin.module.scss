@@ -1,95 +1,119 @@
-/* Checkout embedded Drop-in only. Existing standalone payment components retain their styles. */
+/* Dedicated Novalnet embedded Drop-in. Standalone payment components are untouched. */
 .dropin {
-  --nn-dropin-accent: #176ac7;
-  --nn-dropin-border: #d9e1ed;
-  --nn-dropin-text: #263548;
+  --nn-accent: #0877ed;
+  --nn-outline: #d9dce2;
+  --nn-text: #252a32;
   width: 100%;
-  max-width: var(--novalnet-dropin-max-width, 560px);
+  max-width: none;
   min-width: 0;
   margin: 0;
   padding: 0;
   box-sizing: border-box;
-  color: var(--nn-dropin-text);
-  font: 400 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 400 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: var(--nn-text);
 }
 .dropin, .dropin * { box-sizing: border-box; }
 
-/* Compact Stripe-like payment-method tabs; accessible native radio controls. */
+/* Stripe-style evenly sized payment method tiles + a native "More" dropdown. */
 .methodList {
-  display: flex;
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
   align-items: stretch;
-  gap: 6px;
-  overflow-x: auto;
-  overscroll-behavior-inline: contain;
-  scroll-snap-type: x proximity;
-  scrollbar-width: thin;
-  -webkit-overflow-scrolling: touch;
-  padding: 3px 2px 10px;
-  margin: 0;
+  margin: 0 0 12px;
+  padding: 2px;
 }
 .method {
   position: relative;
   display: flex;
-  flex: 0 0 91px;
   min-width: 0;
-  min-height: 66px;
+  min-height: 65px;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  gap: 4px;
-  padding: 8px 7px;
-  margin: 0;
-  border: 1px solid var(--nn-dropin-border);
+  gap: 5px;
+  padding: 9px 11px;
+  border: 1px solid var(--nn-outline);
   border-radius: 5px;
   background: #fff;
-  color: #3c4859;
-  text-align: center;
-  box-shadow: 0 1px 2px rgb(35 50 70 / 4%);
+  color: #596273;
   cursor: pointer;
-  scroll-snap-align: start;
-  transition: border-color 130ms ease, background-color 130ms ease;
+  text-align: left;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 3%);
+  transition: border-color .15s ease, background .15s ease;
 }
-.method:hover { border-color: #92b9ed; }
-.method[data-active="true"] {
-  border: 2px solid var(--nn-dropin-accent);
-  padding: 7px 6px;
-  background: #f7faff;
-  color: #16529b;
+.method:hover { border-color: #8ebced; }
+.method[data-active='true'] {
+  padding: 8px 10px;
+  border: 2px solid var(--nn-accent);
+  background: #f9fbff;
+  color: #0058be;
 }
-.method:focus-within { outline: 2px solid var(--nn-dropin-accent); outline-offset: 2px; }
-.method input[type="radio"] {
+.method:focus-within, .moreMethods:focus-within {
+  outline: 2px solid var(--nn-accent);
+  outline-offset: 2px;
+}
+.method[hidden], .moreMethods[hidden] { display: none !important; }
+.method input[type='radio'] {
   position: absolute;
   width: 1px;
   height: 1px;
   opacity: 0;
-  margin: 0;
-  left: 50%;
-  top: 50%;
+  pointer-events: none;
 }
-.method input[type="radio"]:disabled ~ * { opacity: .6; }
 .methodLogo {
   display: block;
   width: auto;
-  max-width: 75px;
-  height: 24px;
+  height: 19px;
+  max-width: min(100%, 78px);
   object-fit: contain;
+  object-position: left center;
 }
 .methodText {
   display: block;
-  max-width: 100%;
-  font: 500 11px/1.2 system-ui, -apple-system, "Segoe UI", sans-serif;
+  width: 100%;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
-
-/* Content directly below the selected tab, without a second large bordered box. */
-.panelHolder {
-  width: 100%;
+.moreMethods {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   min-width: 0;
+  min-height: 65px;
+  border: 1px solid var(--nn-outline);
+  border-radius: 5px;
+  background: #fff;
+  cursor: pointer;
 }
+.moreChevron {
+  font-size: 23px;
+  font-weight: 600;
+  color: #4f627c;
+  line-height: 1;
+  pointer-events: none;
+}
+.moreSelect {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* Content is aligned with the tabs, without an additional box or submit button. */
+.panelHolder { width: 100%; min-width: 0; }
 .panel {
   width: 100%;
   min-width: 0;
-  padding: 6px 0 12px;
+  padding: 8px 0 12px;
   margin: 0;
   border: 0;
   background: transparent;
@@ -104,39 +128,39 @@
   height: 270px;
   min-height: 270px;
   max-height: none !important;
-  border: none !important;
+  border: 0 !important;
 }
 .panel iframe { max-width: 100%; }
-.panel :global(input:not([type="hidden"]):not([type="radio"])),
+.panel :global(input:not([type='hidden']):not([type='radio'])),
 .panel :global(select) { max-width: 100%; }
-.panel p { margin-top: 0; }
+.panel :global(p) { margin-top: 0; }
 .cardBrands {
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  gap: 5px;
   flex-wrap: wrap;
-  margin: 0 0 3px;
+  gap: 5px;
+  margin: 0 0 2px;
 }
 .cardBrands:empty { display: none; }
-.cardBrandLogo { display: block; max-width: 39px; height: 16px; object-fit: contain; }
-.walletHint { margin: 6px 0 10px; font-size: 12px; color: #526274; }
-.error { font-size: 13px; margin: 10px 0 0; color: #a11919; }
+.cardBrandLogo { display: block; max-width: 39px; height: 17px; object-fit: contain; }
+.error { margin: 8px 0 0; color: #b42318; font-size: 13px; }
 .error[hidden] { display: none !important; }
 
-@media (max-width: 480px) {
-  .method { flex-basis: 78px; min-height: 63px; padding: 7px 5px; }
-  .method[data-active="true"] { padding: 6px 4px; }
-  .methodLogo { height: 21px; max-width: 64px; }
-  .methodText { font-size: 10px; }
-  .panel { padding-top: 6px; }
-  .panel :global(#novalnet_iframe) { min-height: 275px; }
-}
-
-/* Novalnet-native wallet buttons, inside Drop-in but not behind generic submit(). */
-.walletRow { margin: 0 0 10px; }
-.walletHeading { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #526274; }
-.walletActions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.walletAction { min-width: min(100%, 200px); max-width: 100%; }
+/* Provider SDK native buttons stay user-gesture driven. */
+.walletRow { margin: 8px 0 0; }
+.walletHeading { margin: 0 0 10px; color: #64748b; font-size: 12px; font-weight: 500; }
+.walletActions { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+.walletAction { min-width: min(100%, 225px); max-width: 100%; }
 .walletAction :global(button), .walletAction :global(apple-pay-button) { max-width: 100%; }
-.divider { text-align: center; color: #728197; margin: 12px 0; font-size: 12px; }
+.divider { text-align: center; margin: 11px 0; color: #8a92a0; font-size: 12px; }
+
+@media (max-width: 480px) {
+  .methodList { gap: 5px; }
+  .method, .moreMethods { min-height: 60px; }
+  .method { padding: 7px 8px; }
+  .method[data-active='true'] { padding: 6px 7px; }
+  .methodLogo { height: 17px; max-width: 65px; }
+  .methodText { font-size: 11px; }
+  .panel :global(#novalnet_iframe) { min-height: 280px; }
+}

@@ -70,6 +70,10 @@ export class NovalnetDropin implements DropinComponent {
   private readonly panels = new Map<string, HTMLElement>();
   private readonly radios = new Map<string, HTMLInputElement>();
   private readonly methodLabels = new Map<string, HTMLLabelElement>();
+  private regularMethods: string[] = [];
+  private methodList?: HTMLElement;
+  private overflowSelect?: HTMLSelectElement;
+  private resizeObserver?: ResizeObserver;
   private mounting?: Promise<void>;
   private submitting = false;
   private switching = false;
@@ -132,6 +136,7 @@ export class NovalnetDropin implements DropinComponent {
     // Unlike Stripe's Payment Element, Novalnet SDK wallets cannot safely be
     // triggered by a generic Checkout submit() call.
     const walletHosts = new Map<string, HTMLElement>();
+    let walletSection: HTMLElement | undefined;
     if (walletMethods.length) {
       const walletRow = document.createElement("div");
       walletRow.className = styles.walletRow;
@@ -151,13 +156,7 @@ export class NovalnetDropin implements DropinComponent {
         walletHosts.set(method, host);
       }
       walletRow.appendChild(walletActions);
-      root.appendChild(walletRow);
-      if (regularMethods.length) {
-        const divider = document.createElement("p");
-        divider.className = styles.divider;
-        divider.textContent = this.locale === "de" ? "Oder mit einer anderen Zahlungsart" : "Or pay with";
-        root.appendChild(divider);
-      }
+      walletSection = walletRow;
     }
 
     const methodList = document.createElement("div");
@@ -165,10 +164,23 @@ export class NovalnetDropin implements DropinComponent {
     methodList.setAttribute("role", "radiogroup");
     methodList.setAttribute("aria-label", this.locale === "de" ? "Zahlungsart wählen" : "Choose payment method");
     if (regularMethods.length) root.appendChild(methodList);
+    this.regularMethods = regularMethods;
+    this.methodList = methodList;
 
     const panelHolder = document.createElement("div");
     panelHolder.className = styles.panelHolder;
     root.appendChild(panelHolder);
+    // Keep the core payment selector as the primary Drop-in experience.
+    // Wallet SDK buttons remain native, but are presented after standard methods.
+    if (walletSection) {
+      if (regularMethods.length) {
+        const divider = document.createElement("p");
+        divider.className = styles.divider;
+        divider.textContent = this.locale === "de" ? "Oder schneller mit Wallet bezahlen" : "Or pay faster with a wallet";
+        root.appendChild(divider);
+      }
+      root.appendChild(walletSection);
+    }
 
     for (const method of regularMethods) {
       const label = document.createElement("label");
@@ -224,6 +236,38 @@ export class NovalnetDropin implements DropinComponent {
       });
     }
 
+    if (regularMethods.length > 1) {
+      // Like Stripe's tab selector, only a few methods are visible at once;
+      // additional methods are accessible via a keyboard-friendly dropdown.
+      const more = document.createElement("label");
+      more.className = styles.moreMethods;
+      more.setAttribute("title", this.locale === "de" ? "Weitere Zahlungsarten" : "More payment methods");
+      const moreSelect = document.createElement("select");
+      moreSelect.className = styles.moreSelect;
+      moreSelect.setAttribute("aria-label", this.locale === "de" ? "Weitere Zahlungsarten" : "More payment methods");
+      moreSelect.addEventListener("change", () => {
+        const method = moreSelect.value;
+        moreSelect.value = "";
+        if (!method || this.switching || this.submitting || this.disposed) return;
+        void this.activate(method).catch((error) => {
+          logFailure("overflow-switch", method, error);
+          this.showError();
+        });
+      });
+      const chevron = document.createElement("span");
+      chevron.className = styles.moreChevron;
+      chevron.textContent = "⌄";
+      chevron.setAttribute("aria-hidden", "true");
+      more.append(moreSelect, chevron);
+      methodList.appendChild(more);
+      this.overflowSelect = moreSelect;
+      this.updateVisibleTabs();
+      if (typeof ResizeObserver !== "undefined") {
+        this.resizeObserver = new ResizeObserver(() => this.updateVisibleTabs());
+        this.resizeObserver.observe(root);
+      }
+    }
+
     const errorElement = document.createElement("p");
     errorElement.className = styles.error;
     errorElement.setAttribute("role", "alert");
@@ -270,6 +314,47 @@ export class NovalnetDropin implements DropinComponent {
       await this.remove();
       throw error;
     }
+  }
+
+  /** Keep the selected payment tab visible, even when chosen from More. */
+  private updateVisibleTabs(): void {
+    if (!this.methodList || !this.regularMethods.length) return;
+    const width = this.root?.getBoundingClientRect?.().width || this.root?.clientWidth || 900;
+    const maxTabs = width < 430 ? 2 : width < 680 ? 3 : 4;
+    const hasMore = this.regularMethods.length > maxTabs;
+    const count = hasMore ? maxTabs : this.regularMethods.length;
+    const selected = this.selected;
+    const visible = this.regularMethods.slice(0, count);
+    if (hasMore && selected && !visible.includes(selected)) visible[count - 1] = selected;
+    for (const method of this.regularMethods) {
+      const label = this.methodLabels.get(method);
+      const radio = this.radios.get(method);
+      if (label) label.hidden = !visible.includes(method);
+      if (radio) radio.disabled = !visible.includes(method) || this.switching || this.submitting;
+    }
+    if (this.overflowSelect) {
+      const more = this.overflowSelect.parentElement;
+      if (more) more.hidden = !hasMore;
+      this.overflowSelect.disabled = !hasMore || this.switching || this.submitting;
+      // Only static method names from the processor's allow-list enter this menu.
+      this.overflowSelect.innerHTML = "";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = this.locale === "de" ? "Weitere" : "More";
+      this.overflowSelect.appendChild(placeholder);
+      for (const method of this.regularMethods) {
+        if (visible.includes(method)) continue;
+        const option = document.createElement("option");
+        option.value = method;
+        option.textContent = DROPIN_LABELS[method]?.[this.locale] || method;
+        this.overflowSelect.appendChild(option);
+      }
+      this.overflowSelect.value = "";
+    }
+    // All available Checkout width is used (no fixed 560px form width).
+    this.methodList.style?.setProperty?.(
+      "grid-template-columns", `repeat(${count}, minmax(0, 1fr))${hasMore ? " 50px" : ""}`,
+    );
   }
 
   private showError(): void {
@@ -321,16 +406,18 @@ export class NovalnetDropin implements DropinComponent {
       for (const [name, radio] of this.radios) radio.checked = name === method;
       for (const [name, label] of this.methodLabels) label.setAttribute("data-active", String(name === method));
       if (this.errorElement) this.errorElement.hidden = true;
+      this.updateVisibleTabs();
       novalnetDebug("dropin.activate.complete", { dropinId: this.id, method });
     } catch (error) {
       for (const [name, panel] of this.panels) panel.hidden = name !== previous;
       for (const [name, radio] of this.radios) radio.checked = name === previous;
       for (const [name, label] of this.methodLabels) label.setAttribute("data-active", String(name === previous));
+      this.updateVisibleTabs();
       novalnetDebugError("dropin.activate.failed", error, { dropinId: this.id, method });
       throw error;
     } finally {
       this.switching = false;
-      for (const radio of this.radios.values()) radio.disabled = this.submitting;
+      this.updateVisibleTabs();
     }
   }
 
@@ -356,13 +443,15 @@ export class NovalnetDropin implements DropinComponent {
       throw error;
     } finally {
       this.submitting = false;
-      for (const radio of this.radios.values()) radio.disabled = false;
+      this.updateVisibleTabs();
     }
   }
 
   async remove(): Promise<void> {
     novalnetDebug("dropin.remove", { dropinId: this.id, selected: this.selected, mountedComponents: this.components.size });
     this.disposed = true;
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = undefined;
     for (const component of new Set([...this.components.values(), ...this.prepared.values()])) {
       try { await component.remove?.(); }
       catch (error) { logFailure("remove-component", this.selected, error); }
@@ -373,6 +462,9 @@ export class NovalnetDropin implements DropinComponent {
     this.panels.clear();
     this.radios.clear();
     this.methodLabels.clear();
+    this.regularMethods = [];
+    this.methodList = undefined;
+    this.overflowSelect = undefined;
     this.components.clear();
     this.prepared.clear();
     this.selected = undefined;
